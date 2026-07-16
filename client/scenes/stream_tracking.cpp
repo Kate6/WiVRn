@@ -609,8 +609,8 @@ subpattern_end:
 							for (auto & joint: *h.joints)
 								transform_hand_pose(joint);
 					for (auto & b: body)
-						if (b.poses)
-							for (auto & p: *b.poses)
+						if (auto * htc = std::get_if<from_headset::htc_body>(&b))
+							for (auto & p: htc->poses)
 								transform_pose(p.pose);
 				}
 			}
