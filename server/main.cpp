@@ -9,6 +9,7 @@
 #include "openxr/openxr.h"
 #include "sleep_inhibitor.h"
 #include "util/u_trace_marker.h"
+#include "utils/wivrn_trace.h"
 
 #include "active_runtime.h"
 #include "avahi_publisher.h"
@@ -133,13 +134,6 @@ static bool pressure_vessel_openxr_support()
 	return pv_var and pv_var == std::string_view("1");
 }
 
-static void append_delim(std::string & to, std::string_view what, char delim)
-{
-	if (not to.empty())
-		to += delim;
-	to += what;
-}
-
 // search for the directory in path named needle
 // with d = /a/b/c/d/e and needle = c
 // return /a/b/c
@@ -159,19 +153,23 @@ static std::string steam_command()
 	std::string command;
 
 	if (not pressure_vessel_openxr_support())
-		command = "PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1";
+		command = "PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 ";
+
+	std::string_view home{"\0", 1};
+	if (auto h = std::getenv("HOME"))
+		home = h;
 
 	if (auto p = active_runtime::openvr_compat_path().string(); not p.empty())
 	{
 		// /usr cannot be shared in pressure vessel container
 		if (p.starts_with("/usr"))
-			append_delim(command, " VR_OVERRIDE=/run/host" + p, ' ');
-		else if (p.starts_with("/var"))
-			append_delim(command, "PRESSURE_VESSEL_FILESYSTEMS_RW=" + find_dir(p, "io.github.wivrn.wivrn").string(), ' ');
+			command += "VR_OVERRIDE=/run/host" + p + ' ';
+		else if (p.starts_with("/var") and not p.starts_with(home))
+			command += "PRESSURE_VESSEL_FILESYSTEMS_RW=" + find_dir(p, "io.github.wivrn.wivrn").string() + ' ';
 	}
 
 	if (not command.empty())
-		command += " %command%";
+		command += "%command%";
 
 	return command;
 }
@@ -244,6 +242,8 @@ void start_server(configuration config)
 		// https://github.com/WiVRn/WiVRn/issues/695
 		// something is broken with Intel CCS under vaapi
 		setenv("INTEL_DEBUG", "noccs", false);
+
+		setenv("XRT_LOG", "info", false);
 
 		wivrn::ipc_server_cb server_cb;
 
@@ -418,8 +418,6 @@ gboolean headset_connected_success(void *)
 
 	if (enc_state == wivrn_connection::encryption_state::pairing)
 		set_encryption_state(wivrn_connection::encryption_state::enabled);
-
-	init_cleanup_functions();
 
 	std::cerr << "Client connected" << std::endl;
 
@@ -945,9 +943,9 @@ int inner_main(int argc, char * argv[], bool show_instructions)
 
 	std::filesystem::create_directories(socket_path().parent_path());
 
+	if (do_active_runtime)
+		active_runtime::cleanup_openxr();
 	listen_socket = create_listen_socket();
-
-	u_trace_marker_init();
 
 	// Initialize main loop
 	main_loop = g_main_loop_new(nullptr, false);
@@ -1007,10 +1005,8 @@ int inner_main(int argc, char * argv[], bool show_instructions)
 	avahi_glib_poll_free(glib_poll);
 	g_main_loop_unref(main_loop);
 
-#if WIVRN_USE_SYSTEMD
 	std::error_code ec;
 	std::filesystem::remove(socket_path(), ec);
-#endif
 
 	return wivrn_exit_code::success;
 }

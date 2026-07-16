@@ -35,6 +35,7 @@
 #include "encoder/video_encoder.h"
 #include "inplace_vector.hpp"
 #include "utils/method.h"
+#include "utils/wivrn_trace.h"
 
 #include "xrt/xrt_config_build.h" // IWYU pragma: keep
 #ifdef XRT_FEATURE_RENDERDOC
@@ -81,17 +82,6 @@ struct method_trait<Method, Result (wivrn::compositor::*)(Args...)>
 
 namespace
 {
-os_mutex copy_mutex(std::mutex & m)
-{
-	return {
-	        .mutex = *m.native_handle(),
-#ifndef NDEBUG
-	        .initialized = true,
-	        .recursive = false,
-#endif
-	};
-}
-
 const comp_swapchain_image & get_layer_image(const comp_layer & layer, uint32_t swapchain_index, uint32_t image_index)
 {
 	return reinterpret_cast<struct comp_swapchain *>(comp_layer_get_swapchain(&layer, swapchain_index))->images[image_index];
@@ -293,7 +283,7 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	U_LOG_IFL_D(log_level, "frame %ld commit %d layers", frame.rendering.id, layer_accum.layer_count);
 
 	if (encode_request >= 0 // encoders have not picked up the previous frame
-	    or layer_accum.layer_count == 0 or not session.connected() or not session.get_offset())
+	    or not session.connected() or not session.get_offset())
 	{
 		comp_frame_clear_locked(&frame.rendering);
 		return XRT_SUCCESS;
@@ -434,7 +424,7 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	{
 		if (encoder->stream_idx == 2 and not view_info.alpha)
 			continue;
-		else if (encoder->need_transfer or encoder->target_queue == vk.queue_family_index)
+		else if (encoder->need_transfer or encoder->target_queue == vk.queue.family_index)
 		{
 			image_barriers.push_back(
 			        vk::ImageMemoryBarrier2{
@@ -442,7 +432,17 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 			                .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
 			                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
 			                .dstAccessMask = vk::AccessFlagBits2::eMemoryRead,
-			                .srcQueueFamilyIndex = vk.queue_family_index,
+			                // For a queue-family ownership transfer in EXCLUSIVE
+			                // sharing mode, the release barrier's old/new layout
+			                // must match the encoder-side acquire. newLayout is
+			                // the encoder's target_layout; per the VkImageMemoryBarrier2
+			                // spec the layout transition is executed exactly once
+			                // between the queues, so this single QFOT barrier covers
+			                // both the queue-family transfer and the layout
+			                // transition the encoder needs.
+			                .oldLayout = vk::ImageLayout::eGeneral,
+			                .newLayout = encoder->target_layout,
+			                .srcQueueFamilyIndex = vk.queue.family_index,
 			                .dstQueueFamilyIndex = encoder->target_queue,
 			                .image = images[i].image,
 			                .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -472,8 +472,8 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 		vk::CommandBufferSubmitInfo cmd_info{
 		        .commandBuffer = cmd,
 		};
-		std::unique_lock lock{vk.queue_mutex};
-		vk.queue.submit2(vk::SubmitInfo2{
+		std::unique_lock lock{vk.queue.mutex};
+		vk.queue.queue.submit2(vk::SubmitInfo2{
 		        .commandBufferInfoCount = 1,
 		        .pCommandBufferInfos = &cmd_info,
 		        .signalSemaphoreInfoCount = 1,
@@ -548,14 +548,18 @@ xrt_result_t compositor::get_display_refresh_rate(float * hz)
 
 xrt_result_t compositor::request_display_refresh_rate(float hz)
 {
-	try
+	requested_refresh_rate = hz;
+	U_LOG_I("request refresh rate: %fHz", hz);
+	if (hz > 0)
 	{
-		requested_refresh_rate = hz;
-		session.send_control(to_headset::refresh_rate_change{.hz = hz});
-	}
-	catch (std::exception & e)
-	{
-		U_LOG_W("refresh rate change failed: %s", e.what());
+		try
+		{
+			session.send_control(to_headset::refresh_rate_change{.hz = hz});
+		}
+		catch (std::exception & e)
+		{
+			U_LOG_W("refresh rate change failed: %s", e.what());
+		}
 	}
 	return XRT_SUCCESS;
 }
@@ -614,11 +618,14 @@ void compositor::encoder_work(std::stop_token tok)
 		if (req < 0)
 		{
 			encode_request.wait(req);
+			wivrn::trace::cpu_instant(wivrn::trace::cpu_track::compositor, "encoder_work wake", 0, 0);
 			continue;
 		}
 
 		assert(req < images.size());
 		auto & image = images[req];
+
+		wivrn::trace::scope trace_iter(wivrn::trace::cpu_track::compositor, 0, image.frame_index, "encoder_work iter");
 
 		try
 		{
@@ -672,7 +679,7 @@ compositor::compositor(wivrn_session & session) :
         session(session),
         cmd_pool(vk.device, vk::CommandPoolCreateInfo{
                                     .flags = vk::CommandPoolCreateFlagBits::eTransient,
-                                    .queueFamilyIndex = vk.queue_family_index,
+                                    .queueFamilyIndex = vk.queue.family_index,
                             }),
         query_pool(vk.device, vk::QueryPoolCreateInfo{
                                       .queryType = vk::QueryType::eTimestamp,
@@ -696,7 +703,7 @@ compositor::compositor(wivrn_session & session) :
 	        *vk.instance,
 	        *vk.physical_device,
 	        *vk.device,
-	        vk.queue_family_index,
+	        vk.queue.family_index,
 	        0,
 	        vk.has_device_ext(VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME),
 	        vk.has_device_ext(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME),
@@ -706,13 +713,22 @@ compositor::compositor(wivrn_session & session) :
 	        log_level);
 	vk::detail::resultCheck(vk::Result(res), "vk_init_from_given");
 
+	// vk_init_from_given can't enable calibrated timestamps; do it here.
+#ifdef VK_EXT_calibrated_timestamps
+	c_base->vk.has_EXT_calibrated_timestamps = vk.has_device_ext(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+#endif
+
+	// Share monado's vk_bundle so gpu_timestamp_pool reuses its calibration cache.
+	wivrn::trace::set_calibration_source(&c_base->vk);
+
 	// vk_init_from_given assumes a graphics queue was provided
 	c_base->vk.graphics_queue = nullptr;
 
+	// Monado submits to the main queue from IPC client threads under
+	// main_queue->mutex: our own submissions must take the same lock.
+	vk::detail::resultCheck(vk::Result(vk_init_mutex(&c_base->vk)), "vk_init_mutex");
 	if (c_base->vk.main_queue)
-		c_base->vk.main_queue->mutex = copy_mutex(vk.queue_mutex);
-	if (c_base->vk.encode_queue)
-		c_base->vk.encode_queue->mutex = copy_mutex(vk.encode_queue_mutex);
+		vk.queue.mutex.share(c_base->vk.main_queue->mutex.mutex);
 
 	{
 		comp_vulkan_formats formats{};

@@ -867,6 +867,8 @@ void scenes::lobby::render(const XrFrameState & frame_state)
 
 	if (next_scene)
 	{
+		server_hid_forwarding = next_scene->hid_forwarding_enabled();
+
 		switch (next_scene->current_state())
 		{
 			case scenes::stream::state::streaming:
@@ -1176,8 +1178,25 @@ void scenes::lobby::on_focused()
 	{
 		left_hand = session.create_hand_tracker(XR_HAND_LEFT_EXT);
 		right_hand = session.create_hand_tracker(XR_HAND_RIGHT_EXT);
-		hand_model::add_hand(*this, XR_HAND_LEFT_EXT, "assets://left-hand.glb", layer_controllers);
-		hand_model::add_hand(*this, XR_HAND_RIGHT_EXT, "assets://right-hand.glb", layer_controllers);
+
+		bool using_hand_mesh_fb = false;
+		if (system.hand_mesh_fb_supported())
+		{
+			const auto * left_hand_mesh_fb = left_hand->mesh();
+			const auto * right_hand_mesh_fb = right_hand->mesh();
+			if (left_hand_mesh_fb and right_hand_mesh_fb)
+			{
+				hand_model::add_hand(*this, XR_HAND_LEFT_EXT, *left_hand_mesh_fb, layer_controllers);
+				hand_model::add_hand(*this, XR_HAND_RIGHT_EXT, *right_hand_mesh_fb, layer_controllers);
+				using_hand_mesh_fb = true;
+			}
+		}
+
+		if (!using_hand_mesh_fb)
+		{
+			hand_model::add_hand(*this, XR_HAND_LEFT_EXT, "assets://left-hand.glb", layer_controllers);
+			hand_model::add_hand(*this, XR_HAND_RIGHT_EXT, "assets://right-hand.glb", layer_controllers);
+		}
 	}
 
 	std::vector imgui_inputs{
@@ -1401,6 +1420,7 @@ scene::meta & scenes::lobby::get_meta_scene()
 	                                "/interaction_profiles/bytedance/pico_neo3_controller",
 	                                "/interaction_profiles/bytedance/pico4_controller",
 	                                "/interaction_profiles/bytedance/pico4s_controller",
+	                                "/interaction_profiles/yvr/touch_controller_yvr",
 	                                "/interaction_profiles/htc/vive_focus3_controller",
 	                        },
 	                        {

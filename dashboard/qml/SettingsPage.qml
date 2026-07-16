@@ -89,6 +89,11 @@ Kirigami.ScrollablePage {
                 Kirigami.FormData.label: i18n("Autostart application:")
             }
 
+            Controls.CheckBox {
+                id: auto_connect_usb
+                text: i18n("Auto connect from USB")
+            }
+
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
             }
@@ -106,10 +111,10 @@ Kirigami.ScrollablePage {
                 visible: Settings.hid_forwarding_supported
                 Controls.CheckBox {
                     id: hid_forwarding
-                    text: i18n("Forward keyboard & mouse from headset")
+                    text: i18n("Expose forwarded input devices via uinput")
                 }
                 Kirigami.ContextualHelpButton {
-                    toolTipText: i18n("Keyboard and mouse connected to the client will act as if connected to the server. Client OS may reserve specific keys and combinations, which cannot be forwarded.")
+                    toolTipText: i18n("Replicate mouse, keyboard and gamepad connected to the headset as virtual devices on PC.\nReplicated devices will appear as if they were plugged to the PC, some keys may be reserved by the headset OS and not be available. Gamepad is also available without virtual devices for applications that access it through OpenXR.")
                 }
             }
             Controls.CheckBox {
@@ -138,7 +143,7 @@ Kirigami.ScrollablePage {
             Dialogs.FileDialog {
                 id: adb_browse
                 onAccepted: {
-                    adb_location.text = new URL(selectedFile).pathname;
+                    adb_location.text = WivrnServer.host_path(new URL(selectedFile).pathname);
                 }
             }
 
@@ -278,13 +283,15 @@ Kirigami.ScrollablePage {
         }
         DashboardSettings.adb_custom = adb_custom.checked;
         DashboardSettings.adb_location = adb_location.text;
-        Adb.setPath(DashboardSettings.adb_custom.checked ? adb_location.text : "adb");
+        Adb.setPath(adb_custom.checked ? adb_location.text : "adb");
 
         DashboardSettings.show_system_checks = show_system_checks.checked;
 
         Settings.debugGui = debug_gui.checked;
         Settings.steamVrLh = steamvr_lh.checked;
         Settings.hidForwarding = hid_forwarding.checked;
+
+        DashboardSettings.auto_connect_usb = auto_connect_usb.checked;
     }
 
     function load() {
@@ -292,6 +299,8 @@ Kirigami.ScrollablePage {
         debug_gui.checked = Settings.debugGui;
         steamvr_lh.checked = Settings.steamVrLh;
         hid_forwarding.checked = Settings.hidForwarding;
+
+        auto_connect_usb.checked = DashboardSettings.auto_connect_usb;
 
         openvr_combobox.load()
 

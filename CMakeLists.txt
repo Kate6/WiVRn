@@ -23,6 +23,14 @@ include(FetchContent)
 include(ExternalProject)
 include(GNUInstallDirs)
 
+set(GIT_TAG "" CACHE STRING "Build for a tag (from git if empty)")
+set(GIT_DESC "" CACHE STRING "Version to show in UI (from git if empty, exclusive with GIT_TAG)")
+set(GIT_COMMIT "" CACHE STRING "Git SHA used to fetch client APK (from git if empty, exclusive with GIT_TAG)")
+
+if (GIT_TAG AND (GIT_DESC OR GIT_COMMIT))
+	message(FATAL_ERROR "cannot use GIT_DESC or GIT_COMMIT when using GIT_TAG")
+endif()
+
 option(WIVRN_USE_SYSTEM_FREETYPE "Use system FreeType" ON)
 option(WIVRN_USE_SYSTEM_BOOST "Use system Boost headers" ON)
 option(WIVRN_USE_SYSTEM_OPENXR "Use system OpenXR headers" ON)
@@ -51,10 +59,15 @@ option(WIVRN_USE_VAAPI "Enable vaapi (AMD/Intel) hardware encoder" ON)
 option(WIVRN_USE_VULKAN_ENCODE "Enable vulkan video encoder" ON)
 option(WIVRN_USE_X264 "Enable x264 software encoder" ON)
 
-option(WIVRN_USE_PIPEWIRE "Enable pipewire backend" ON)
-option(WIVRN_USE_PULSEAUDIO "Enable pulseaudio backend" OFF)
+option(WIVRN_USE_PERFETTO "Enable Perfetto tracing via the Perfetto SDK (server only)" OFF)
+option(WIVRN_TRACE_MONADO "Also instrument Monado (percetto) under the same WIVRN_TRACING switch; pulls in a second Perfetto runtime, system backend only. Requires WIVRN_USE_PERFETTO" OFF)
+if(WIVRN_TRACE_MONADO AND NOT WIVRN_USE_PERFETTO)
+	message(FATAL_ERROR "WIVRN_TRACE_MONADO=ON requires WIVRN_USE_PERFETTO=ON")
+endif()
 
-set(OVR_COMPAT_SEARCH_PATH "/opt/xrizer:/usr/local/lib/OpenComposite:/usr/lib/OpenComposite:/opt/OpenComposite:/opt/opencomposite"
+option(WIVRN_USE_PIPEWIRE "Enable pipewire backend" ON)
+
+set(OVR_COMPAT_SEARCH_PATH "/opt/xrizer:/usr/local/lib/OpenComposite:/usr/lib/OpenComposite:/opt/OpenComposite:/opt/opencomposite:/opt/VapoR:/usr/local/lib/VapoR"
     CACHE STRING "List of places to search for the OpenVR compatibility layer, separated by :")
 
 option(WIVRN_FEATURE_DEBUG_GUI "Enable Monado debug GUI" OFF)
@@ -141,10 +154,6 @@ if (WIVRN_BUILD_SERVER)
         pkg_check_modules(libpipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
     endif()
 
-    if (WIVRN_USE_PULSEAUDIO)
-        pkg_check_modules(libpulse REQUIRED IMPORTED_TARGET libpulse)
-    endif()
-
     pkg_check_modules(AVAHI REQUIRED IMPORTED_TARGET avahi-client avahi-glib)
     find_package(Eigen3 REQUIRED)
     find_package(nlohmann_json REQUIRED)
@@ -185,7 +194,7 @@ endif()
 
 if (WIVRN_BUILD_CLIENT)
     find_program(RSVG_CONVERT rsvg-convert REQUIRED)
-    find_program(TOKTX toktx REQUIRED)
+    find_program(KTX ktx REQUIRED)
 
     if (WIVRN_COMPRESS_GLB)
         find_program(GLTF_TRANSFORM gltf-transform REQUIRED)
@@ -201,7 +210,7 @@ if (WIVRN_BUILD_CLIENT AND NOT ANDROID)
     find_package(Fontconfig REQUIRED)
 
     if (WIVRN_USE_SYSTEM_OPENXR)
-        find_package(OpenXR 1.1.53 REQUIRED)
+        find_package(OpenXR 1.1.58 REQUIRED)
     endif()
 
     if (WIVRN_USE_SYSTEM_LIBKTX)
@@ -239,8 +248,8 @@ FetchContent_Declare(fastgltf      EXCLUDE_FROM_ALL SYSTEM URL https://github.co
                                    URL_HASH SHA256=0bb564e127b14c22f062db50f89381dd2e0a20dbaf4987ca138a4ae8728712f9)
 FetchContent_Declare(glm           EXCLUDE_FROM_ALL SYSTEM URL https://github.com/g-truc/glm/releases/download/1.0.2/glm-1.0.2.zip
                                    URL_HASH SHA256=77fff075c5ab0caf076fade41558c5458d9a242aba2b2076bb72008bdb51a35e)
-FetchContent_Declare(openxr_loader EXCLUDE_FROM_ALL SYSTEM URL https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-1.1.54.tar.gz
-                                   URL_HASH SHA256=2055688081066e37238be996534f349420ac52ed34f8514836704232121ee7f3)
+FetchContent_Declare(openxr_loader EXCLUDE_FROM_ALL SYSTEM URL https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-1.1.58.tar.gz
+                                   URL_HASH SHA256=815b933219c398314366c289221526428418d799205a73a9640c97ca4242602b)
 FetchContent_Declare(spdlog        EXCLUDE_FROM_ALL SYSTEM URL https://github.com/gabime/spdlog/archive/refs/tags/v1.16.0.tar.gz
                                    URL_HASH SHA256=8741753e488a78dd0d0024c980e1fb5b5c85888447e309d9cb9d949bdb52aa3e)
 FetchContent_Declare(stb           EXCLUDE_FROM_ALL SYSTEM URL https://github.com/nothings/stb/archive/013ac3beddff3dbffafd5177e7972067cd2b5083.zip
@@ -285,6 +294,7 @@ add_custom_target(wivrn-version ALL
         -D OUTPUT_FILE=${CMAKE_BINARY_DIR}/version.cpp
         -D INPUT_FILE_1=${CMAKE_CURRENT_SOURCE_DIR}/server/u_git_tag.cpp.in
         -D OUTPUT_FILE_1=${CMAKE_BINARY_DIR}/u_git_tag.cpp
+        -D GIT_TAG="${GIT_TAG}"
         -D GIT_DESC="${GIT_DESC}"
         -D GIT_COMMIT="${GIT_COMMIT}"
         -P ${CMAKE_SOURCE_DIR}/cmake/GitVersion.cmake
@@ -313,7 +323,6 @@ if (WIVRN_BUILD_SERVER OR WIVRN_BUILD_SERVER_LIBRARY)
         message(STATUS "")
         message(STATUS "Audio backends:")
         message(STATUS "\tPipewire  : ${WIVRN_USE_PIPEWIRE}")
-        message(STATUS "\tPulseaudio: ${WIVRN_USE_PULSEAUDIO}")
         message(STATUS "")
         message(STATUS "Optional features:")
         message(STATUS "\tsystemd: ${WIVRN_USE_SYSTEMD}")

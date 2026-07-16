@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <glm/ext/quaternion_common.hpp>
 #define IMGUI_DEFINE_MATH_OPERATORS
 
 #include "stream.h"
@@ -386,6 +387,8 @@ static void send_settings_changed_packet(xr::session & session, wivrn_session * 
 	                .minimum_refresh_rate = config.minimum_refresh_rate.value_or(0),
 	                .fps_divider = config.fps_divider,
 	                .bitrate_bps = config.bitrate_bps,
+	                .mirror_gamepad = config.forward_gamepad,
+	                .enabled_body_parts = config.body_part_mask,
 	        });
 }
 
@@ -411,6 +414,12 @@ void scenes::stream::gui_settings(float predicted_display_period)
 		imgui_ctx->vibrate_on_hover();
 		if (ImGui::IsItemHovered())
 			imgui_ctx->tooltip(_("Click to adjust bitrate"));
+	}
+
+	if (config.check_feature(feature::body_tracking))
+	{
+		if (gui::body_tracking_parts(system, *imgui_ctx, config))
+			send_settings_changed_packet(session, network_session.get(), config);
 	}
 
 	if (application::get_openxr_post_processing_supported())
@@ -525,10 +534,10 @@ void scenes::stream::gui_foveation_settings(float predicted_display_period)
 	float delta_pitch = application::read_action_float(settings_adjust).value_or(std::pair{0, 0}).second * predicted_display_period;
 
 	// Maximum speed 2m/s @ 1m
-	float delta_distance = std::exp(std::log(2) * application::read_action_float(foveation_distance).value_or(std::pair{0, 0}).second * predicted_display_period);
+	float delta_distance = std::pow(constants::stream::gui_max_foveation_speed, application::read_action_float(foveation_distance).value_or(std::pair{0, 0}).second * predicted_display_period);
 
-	override_foveation_pitch = std::clamp<float>(override_foveation_pitch + delta_pitch, -M_PI / 3, M_PI / 3);
-	override_foveation_distance = std::clamp<float>(override_foveation_distance * delta_distance, 0.5, 100);
+	override_foveation_pitch = std::clamp<float>(override_foveation_pitch + delta_pitch, constants::stream::gui_min_foveation_pitch, constants::stream::gui_max_foveation_pitch);
+	override_foveation_distance = std::clamp<float>(override_foveation_distance * delta_distance, constants::stream::gui_min_foveation_distance, constants::stream::gui_max_foveation_distance);
 
 	bool ok = application::read_action_bool(foveation_ok).value_or(std::pair{0, false}).second;
 	bool cancel = application::read_action_bool(foveation_cancel).value_or(std::pair{0, false}).second;
@@ -653,6 +662,24 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 	if (auto new_status = next_gui_status.load(); new_status != gui_status)
 	{
 		spdlog::info("Switch tab from {} to {}", magic_enum::enum_name(gui_status), magic_enum::enum_name(new_status));
+
+		if (not is_gui_interactable() and is_interactable(new_status))
+		{
+			if (auto head_position = application::locate_controller(application::space(xr::spaces::view), application::space(xr::spaces::world), predicted_display_time))
+			{
+				world_gui_orientation = head_position->second * head_gui_orientation;
+				world_gui_position = head_position->first + glm::mat3_cast(head_position->second) * head_gui_position;
+			}
+		}
+		else if (is_gui_interactable() and not is_interactable(new_status))
+		{
+			if (auto head_position = application::locate_controller(application::space(xr::spaces::view), application::space(xr::spaces::world), predicted_display_time))
+			{
+				head_gui_orientation = glm::conjugate(head_position->second) * world_gui_orientation;
+				head_gui_position = glm::mat3_cast(glm::conjugate(head_position->second)) * (world_gui_position - head_position->first);
+			}
+		}
+
 		stored_gui_status = gui_status;
 		gui_status = new_status;
 		gui_status_last_change = predicted_display_time;
@@ -689,7 +716,7 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 		case stream_tab::application_launcher:
 			break;
 	}
-	imgui_ctx->set_controllers_enabled(interactable);
+	imgui_ctx->set_controllers_enabled(interactable and not recentering_context);
 	if (interactable)
 	{
 		if (system.hand_tracking_supported())
@@ -747,14 +774,22 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 
 			case stream_tab::overlay_only:
 			case stream_tab::compact:
+				imgui_ctx->layers()[0].orientation = head_position->second * head_gui_orientation;
+				imgui_ctx->layers()[0].position = head_position->first + M * head_gui_position;
+				break;
+
 			case stream_tab::stats:
 			case stream_tab::settings:
 			case stream_tab::applications:
 			case stream_tab::application_launcher:
-				imgui_ctx->layers()[0].orientation = head_position->second * head_gui_orientation;
-				imgui_ctx->layers()[0].position = head_position->first + M * head_gui_position;
+				imgui_ctx->layers()[0].orientation = world_gui_orientation;
+				imgui_ctx->layers()[0].position = world_gui_position;
 				break;
 		}
+
+		// Position popup layer
+		imgui_ctx->layers()[1].orientation = imgui_ctx->layers()[0].orientation;
+		imgui_ctx->layers()[1].position = imgui_ctx->layers()[0].position + imgui_ctx->layers()[0].orientation * constants::lobby::popup_position;
 	}
 
 	const float tab_width = 300;
@@ -767,14 +802,13 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 	ImVec2 content_size{viewport_size - ImVec2{tab_width, 0} - margin_around_window * 2};
 	ImVec2 content_center = margin_around_window + content_size / 2 + ImVec2{tab_width, 0};
 
-	bool display_tabs, always_auto_resize;
+	bool display_tabs = false;
+	bool always_auto_resize = false;
 	switch (gui_status)
 	{
 		case stream_tab::overlay_only:
 			ImGui::SetNextWindowPos(content_center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 			ImGui::SetNextWindowSize(content_size);
-			always_auto_resize = false;
-			display_tabs = false;
 			break;
 
 		case stream_tab::hidden:
@@ -782,13 +816,11 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 		case stream_tab::foveation_settings:
 			ImGui::SetNextWindowPos(viewport_size / 2, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 			always_auto_resize = true;
-			display_tabs = false;
 			break;
 
 		case stream_tab::compact:
 			ImGui::SetNextWindowPos(content_center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 			always_auto_resize = true;
-			display_tabs = false;
 			break;
 
 		case stream_tab::stats:
@@ -796,14 +828,11 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 		case stream_tab::applications:
 			ImGui::SetNextWindowPos(margin_around_window);
 			ImGui::SetNextWindowSize(viewport_size - margin_around_window * 2);
-			always_auto_resize = false;
 			display_tabs = true;
 			break;
 		case stream_tab::application_launcher:
 			ImGui::SetNextWindowPos(margin_around_window);
 			ImGui::SetNextWindowSize(viewport_size - margin_around_window * 2);
-			always_auto_resize = false;
-			display_tabs = false;
 			break;
 	}
 
@@ -966,14 +995,14 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 			}
 
 			if (state)
-				update_gui_position(controller);
+				update_gui_position(controller, predicted_display_period * 1e-9f);
 			else
 				recentering_context.reset();
 		}
 		else if (auto state = application::read_action_bool(recenter_left); state and state->second)
-			update_gui_position(xr::spaces::aim_left);
+			update_gui_position(xr::spaces::aim_left, predicted_display_period * 1e-9f);
 		else if (auto state = application::read_action_bool(recenter_right); state and state->second)
-			update_gui_position(xr::spaces::aim_right);
+			update_gui_position(xr::spaces::aim_right, predicted_display_period * 1e-9f);
 		else
 			recentering_context.reset();
 

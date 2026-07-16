@@ -32,6 +32,7 @@
 #include "wivrn_packets.h"
 #include "xr/space.h"
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <shared_mutex>
 #include <thread>
@@ -76,7 +77,7 @@ private:
 	std::unique_ptr<wivrn_session> network_session;
 	std::thread network_thread;
 	thread_safe<to_headset::tracking_control> tracking_control{};
-	std::array<std::atomic<interaction_profile>, 2> interaction_profiles; // left and right hand
+	std::array<std::atomic<interaction_profile>, 3> interaction_profiles; // left hand, right hand, gamepad
 	std::atomic<bool> interaction_profile_changed = false;
 	std::atomic<XrTime> scheduled_derived_pose = 0; // Tracking thread will compute derived pose when time is reached
 	std::atomic<bool> recenter_requested = false;
@@ -157,14 +158,20 @@ private:
 	XrAction plots_toggle_2 = XR_NULL_HANDLE;
 	XrAction recenter_left = XR_NULL_HANDLE;
 	XrAction recenter_right = XR_NULL_HANDLE;
+	XrAction gui_distance_left = XR_NULL_HANDLE;
+	XrAction gui_distance_right = XR_NULL_HANDLE;
 	XrAction settings_adjust = XR_NULL_HANDLE;
 	XrAction foveation_distance = XR_NULL_HANDLE;
 	XrAction foveation_ok = XR_NULL_HANDLE;
 	XrAction foveation_cancel = XR_NULL_HANDLE;
 
-	// Position of the GUI relative to the view space, in view space axes
+	// Position of the GUI relative to the view space, in view space axes, used when the GUI is not interactable
 	glm::vec3 head_gui_position{-0.1, -0.3, -1.2}; // Shift 10cm left by default so that the stats are centered accounting for the tab list
 	glm::quat head_gui_orientation{1, 0, 0, 0};
+
+	// Position of the GUI relative to the world space, in world space axes, used when the GUI is interactable
+	glm::vec3 world_gui_position;
+	glm::quat world_gui_orientation;
 
 	bool override_foveation_enable;
 	float override_foveation_pitch; // The pitch is the opposite as the height displayed in the GUI
@@ -172,7 +179,7 @@ private:
 
 	// Which controller is used for recentering and position of the GUI relative to the controller, in controller axes, during recentering
 	std::optional<std::tuple<xr::spaces, glm::vec3, glm::quat>> recentering_context;
-	void update_gui_position(xr::spaces controller);
+	void update_gui_position(xr::spaces controller, float predicted_display_period);
 
 	// Lying down mode correction
 	bool lying_down_recentered = false;
@@ -187,7 +194,7 @@ private:
 
 	stream(std::string server_name, scene & parent_scene);
 
-	bool forward_hid_input(from_headset::hid::input_t);
+	bool forward_hid_input(from_headset::hid::input_t, bool device_enabled);
 
 public:
 	~stream();
@@ -236,6 +243,13 @@ public:
 	state current_state() const
 	{
 		return state_;
+	}
+
+	// Whether the server mirrors forwarded input devices to uinput. The gamepad is also exposed
+	// through OpenXR regardless, so this only affects forwarded keyboard and mouse.
+	bool hid_forwarding_enabled() const
+	{
+		return hid_forwarding;
 	}
 
 	void exit();

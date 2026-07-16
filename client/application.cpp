@@ -34,12 +34,12 @@
 #include "xr/check.h"
 #include "xr/htc_exts.h"
 #include "xr/htc_face_tracker.h"
-#include "xr/meta_body_tracking_fidelity.h"
 #include "xr/to_string.h"
 #include <algorithm>
 #include <boost/locale.hpp>
 #include <boost/url/parse.hpp>
 #include <chrono>
+#include <cstring>
 #include <ctype.h>
 #include <exception>
 #include <magic_enum.hpp>
@@ -478,6 +478,47 @@ static std::vector<interaction_profile> interaction_profiles{
                 },
         },
         interaction_profile{
+                .profile_name = "/interaction_profiles/yvr/touch_controller_yvr",
+                .input_sources = {
+                        "/user/hand/left/output/haptic",
+                        "/user/hand/right/output/haptic",
+
+                        "/user/hand/left/input/grip/pose",
+                        "/user/hand/left/input/aim/pose",
+
+                        "/user/hand/right/input/grip/pose",
+                        "/user/hand/right/input/aim/pose",
+
+                        "/user/hand/left/input/x/click",
+                        "/user/hand/left/input/x/touch",
+                        "/user/hand/left/input/y/click",
+                        "/user/hand/left/input/y/touch",
+                        "/user/hand/left/input/menu/click",
+                        "/user/hand/left/input/squeeze/value",
+                        "/user/hand/left/input/squeeze/click",
+                        "/user/hand/left/input/trigger/value",
+                        "/user/hand/left/input/trigger/touch",
+                        "/user/hand/left/input/thumbstick",
+                        "/user/hand/left/input/thumbstick/click",
+                        "/user/hand/left/input/thumbstick/touch",
+                        "/user/hand/left/input/thumbrest/touch",
+
+                        "/user/hand/right/input/a/click",
+                        "/user/hand/right/input/a/touch",
+                        "/user/hand/right/input/b/click",
+                        "/user/hand/right/input/b/touch",
+                        "/user/hand/right/input/system/click",
+                        "/user/hand/right/input/squeeze/value",
+                        "/user/hand/right/input/squeeze/click",
+                        "/user/hand/right/input/trigger/value",
+                        "/user/hand/right/input/trigger/touch",
+                        "/user/hand/right/input/thumbstick",
+                        "/user/hand/right/input/thumbstick/click",
+                        "/user/hand/right/input/thumbstick/touch",
+                        "/user/hand/right/input/thumbrest/touch",
+                },
+        },
+        interaction_profile{
                 .profile_name = "/interaction_profiles/htc/vive_focus3_controller",
                 .required_extensions = {XR_HTC_VIVE_FOCUS3_CONTROLLER_INTERACTION_EXTENSION_NAME},
                 .input_sources = {
@@ -562,6 +603,35 @@ static std::vector<interaction_profile> interaction_profiles{
                         "/user/eyes_ext/input/gaze_ext/pose",
                 },
         },
+        interaction_profile{
+                .profile_name = "/interaction_profiles/microsoft/xbox_controller",
+                .input_sources = {
+                        "/user/gamepad/input/menu/click",
+                        "/user/gamepad/input/view/click",
+                        "/user/gamepad/input/a/click",
+                        "/user/gamepad/input/b/click",
+                        "/user/gamepad/input/x/click",
+                        "/user/gamepad/input/y/click",
+                        "/user/gamepad/input/dpad_up/click",
+                        "/user/gamepad/input/dpad_down/click",
+                        "/user/gamepad/input/dpad_left/click",
+                        "/user/gamepad/input/dpad_right/click",
+                        "/user/gamepad/input/shoulder_left/click",
+                        "/user/gamepad/input/shoulder_right/click",
+                        "/user/gamepad/input/thumbstick_left/click",
+                        "/user/gamepad/input/thumbstick_right/click",
+                        "/user/gamepad/input/trigger_left/value",
+                        "/user/gamepad/input/trigger_right/value",
+                        "/user/gamepad/input/thumbstick_left/x",
+                        "/user/gamepad/input/thumbstick_left/y",
+                        "/user/gamepad/input/thumbstick_right/x",
+                        "/user/gamepad/input/thumbstick_right/y",
+                        "/user/gamepad/output/haptic_left",
+                        "/user/gamepad/output/haptic_right",
+                        "/user/gamepad/output/haptic_left_trigger",
+                        "/user/gamepad/output/haptic_right_trigger",
+                },
+        },
 };
 
 static const std::pair<std::string_view, XrActionType> action_suffixes[] =
@@ -594,11 +664,15 @@ static const std::pair<std::string_view, XrActionType> action_suffixes[] =
 		{"/ready_ext", XR_ACTION_TYPE_BOOLEAN_INPUT},
 
 		// Output paths
-		{"/haptic",           XR_ACTION_TYPE_VIBRATION_OUTPUT},
-		{"/haptic_trigger",   XR_ACTION_TYPE_VIBRATION_OUTPUT},
-		{"/haptic_trigger_fb",XR_ACTION_TYPE_VIBRATION_OUTPUT},
-		{"/haptic_thumb",     XR_ACTION_TYPE_VIBRATION_OUTPUT},
-		{"/haptic_thumb_fb",  XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic",              XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_trigger",      XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_trigger_fb",   XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_thumb",        XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_thumb_fb",     XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_left",         XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_right",        XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_left_trigger", XR_ACTION_TYPE_VIBRATION_OUTPUT},
+		{"/haptic_right_trigger",XR_ACTION_TYPE_VIBRATION_OUTPUT},
                 // clang-format on
 };
 
@@ -1203,6 +1277,7 @@ void application::initialize()
 	        XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME,
 	        XR_EXT_HAND_INTERACTION_EXTENSION_NAME,
 	        XR_EXT_HAND_TRACKING_EXTENSION_NAME,
+	        XR_FB_HAND_TRACKING_MESH_EXTENSION_NAME,
 	        XR_EXT_PALM_POSE_EXTENSION_NAME,
 	        XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME,
 	        XR_EXT_USER_PRESENCE_EXTENSION_NAME,
@@ -1676,8 +1751,10 @@ void application::run()
 		while (ALooper_pollOnce(100, nullptr, &events, (void **)&source) >= 0)
 		{
 			// Process this event.
-			if (source != nullptr)
-				source->process(app_info.native_app, source);
+			if (source == nullptr)
+				continue;
+
+			source->process(app_info.native_app, source);
 		}
 
 		if (app_info.native_app->destroyRequested)

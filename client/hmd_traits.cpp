@@ -57,7 +57,7 @@ static std::optional<std::string> get_property(const char * property)
 static std::optional<std::string> env_string(std::string_view name)
 {
 #ifdef __ANDROID__
-	auto android_sysprop_name = std::format("wivrn.debug.{}", name);
+	auto android_sysprop_name = std::format("debug.wivrn.{}", name);
 	return get_property(android_sysprop_name.c_str());
 #else
 	std::string env_name = "WIVRN_";
@@ -165,6 +165,11 @@ void hmd_traits::init()
 	else if (model == "Lynx-R1")
 	{
 		needs_srgb_conversion = false;
+	}
+
+	else if (manufacturer == "Play For Dream" and model == "PFDM MR")
+	{
+		controller_profile = "yvr-touch-v2";
 	}
 
 	else if (manufacturer == "Pico")
@@ -441,13 +446,31 @@ std::pair<glm::vec3, glm::quat> hmd_traits::controller_offset(xr::spaces space) 
 				break;
 		}
 	}
-	else if (profile == "pico-4" or profile == "pico-4u")
+	else if (profile == "pico-4")
 	{
 		switch (space)
 		{
 			case xr::spaces::grip_left:
 			case xr::spaces::grip_right:
-				return {{0, -0.01, -0.04}, glm::angleAxis(glm::radians(-20.f), glm::vec3{1, 0, 0})};
+				return {{0, -0.02, -0.05}, glm::angleAxis(glm::radians(-30.f), glm::vec3{1, 0, 0})};
+
+			case xr::spaces::aim_left:
+				return {{-0.005, 0, 0.02}, {1, 0, 0, 0}};
+
+			case xr::spaces::aim_right:
+				return {{0.005, 0, 0.02}, {1, 0, 0, 0}};
+
+			default:
+				break;
+		}
+	}
+	else if (profile == "pico-4u")
+	{
+		switch (space)
+		{
+			case xr::spaces::grip_left:
+			case xr::spaces::grip_right:
+				return {{0, -0.042, -0.042}, glm::angleAxis(glm::radians(-8.f), glm::vec3{1, 0, 0})};
 
 			case xr::spaces::aim_left:
 				return {{-0.005, 0, 0.02}, {1, 0, 0, 0}};
