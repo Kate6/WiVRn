@@ -609,9 +609,74 @@ subpattern_end:
 							for (auto & joint: *h.joints)
 								transform_hand_pose(joint);
 					for (auto & b: body)
-						if (auto * htc = std::get_if<from_headset::htc_body>(&b))
-							for (auto & p: htc->poses)
-								transform_pose(p.pose);
+						std::visit(utils::overloaded{
+						                   [&](from_headset::htc_body & htc) {
+							                   for (auto & p: htc.poses)
+								                   transform_pose(p.pose);
+						                   },
+						                   [&](from_headset::bd_body & bd) {
+							                   for (auto & j: bd.joints)
+							                   {
+								                   glm::quat q(j.orientation.x, j.orientation.y, j.orientation.z, j.orientation.w);
+								                   glm::vec3 p(j.position.x, j.position.y, j.position.z);
+								                   glm::vec3 new_p = world_rotation_correction * (p - world_translation_correction) + offset;
+								                   glm::quat new_q = world_rotation_correction * q;
+								                   j.position = {new_p.x, new_p.y, new_p.z};
+								                   j.orientation = pack({new_q.x, new_q.y, new_q.z, new_q.w});
+							                   }
+						                   },
+						                   [&](from_headset::meta_body & mb) {
+							                   std::visit(utils::overloaded{
+							                                  [&](from_headset::meta_body::fb_joints & joints) {
+								                                  // root
+								                                  {
+									                                  glm::quat q(joints.root.orientation.x, joints.root.orientation.y, joints.root.orientation.z, joints.root.orientation.w);
+									                                  glm::vec3 p(joints.root.position.x, joints.root.position.y, joints.root.position.z);
+									                                  glm::vec3 new_p = world_rotation_correction * (p - world_translation_correction) + offset;
+									                                  glm::quat new_q = world_rotation_correction * q;
+									                                  joints.root.position = {new_p.x, new_p.y, new_p.z};
+									                                  joints.root.orientation = pack({new_q.x, new_q.y, new_q.z, new_q.w});
+								                                  }
+								                                  for (auto & j: joints.joints)
+								                                  {
+									                                  glm::vec3 dp(j.position.x * 0.0001f, j.position.y * 0.0001f, j.position.z * 0.0001f);
+									                                  glm::quat q(j.orientation.x, j.orientation.y, j.orientation.z, j.orientation.w);
+									                                  glm::vec3 new_dp = world_rotation_correction * dp;
+									                                  glm::quat new_q = world_rotation_correction * q;
+									                                  j.position.x = int16_t(std::clamp(new_dp.x * 10000.f, -32768.f, 32767.f));
+									                                  j.position.y = int16_t(std::clamp(new_dp.y * 10000.f, -32768.f, 32767.f));
+									                                  j.position.z = int16_t(std::clamp(new_dp.z * 10000.f, -32768.f, 32767.f));
+									                                  j.orientation = pack({new_q.x, new_q.y, new_q.z, new_q.w});
+								                                  }
+							                                  },
+							                                  [&](from_headset::meta_body::meta_joints & joints) {
+								                                  {
+									                                  glm::quat q(joints.root.orientation.x, joints.root.orientation.y, joints.root.orientation.z, joints.root.orientation.w);
+									                                  glm::vec3 p(joints.root.position.x, joints.root.position.y, joints.root.position.z);
+									                                  glm::vec3 new_p = world_rotation_correction * (p - world_translation_correction) + offset;
+									                                  glm::quat new_q = world_rotation_correction * q;
+									                                  joints.root.position = {new_p.x, new_p.y, new_p.z};
+									                                  joints.root.orientation = pack({new_q.x, new_q.y, new_q.z, new_q.w});
+								                                  }
+								                                  for (auto & j: joints.joints)
+								                                  {
+									                                  glm::vec3 dp(j.position.x * 0.0001f, j.position.y * 0.0001f, j.position.z * 0.0001f);
+									                                  glm::quat q(j.orientation.x, j.orientation.y, j.orientation.z, j.orientation.w);
+									                                  glm::vec3 new_dp = world_rotation_correction * dp;
+									                                  glm::quat new_q = world_rotation_correction * q;
+									                                  j.position.x = int16_t(std::clamp(new_dp.x * 10000.f, -32768.f, 32767.f));
+									                                  j.position.y = int16_t(std::clamp(new_dp.y * 10000.f, -32768.f, 32767.f));
+									                                  j.position.z = int16_t(std::clamp(new_dp.z * 10000.f, -32768.f, 32767.f));
+									                                  j.orientation = pack({new_q.x, new_q.y, new_q.z, new_q.w});
+								                                  }
+							                                  },
+							                                  [](std::monostate &) {},
+							                          },
+							                          mb.joints);
+						                   },
+						                   [](std::monostate &) {},
+						           },
+						           b);
 				}
 			}
 			catch (const std::system_error & e)
