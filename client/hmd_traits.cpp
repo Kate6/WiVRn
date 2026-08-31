@@ -137,7 +137,8 @@ std::optional<std::unordered_set<std::string>> env(std::string_view name)
 	if (not values)
 		return std::nullopt;
 
-	return std::unordered_set<std::string>{std::from_range, utils::split(*values, ",")};
+	auto parts = utils::split(*values, ",");
+	return std::unordered_set<std::string>(parts.begin(), parts.end());
 }
 
 void hmd_traits::init()
